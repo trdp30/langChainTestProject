@@ -1,26 +1,18 @@
 /* Agent */
 
 import "dotenv/config";
-import { createHistoryAwareRetriever } from "langchain/chains/history_aware_retriever";
-import { MessagesPlaceholder } from "@langchain/core/prompts";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
-import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { ChatOpenAI, OpenAIEmbeddings } from "@langchain/openai";
 import { MemoryVectorStore } from "langchain/vectorstores/memory";
 import { CheerioWebBaseLoader } from "langchain/document_loaders/web/cheerio";
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
-import { createStuffDocumentsChain } from "langchain/chains/combine_documents";
-import { createRetrievalChain } from "langchain/chains/retrieval";
 import { createRetrieverTool } from "langchain/tools/retriever";
 import { TavilySearchResults } from "@langchain/community/tools/tavily_search";
 import { pull } from "langchain/hub";
 import { createOpenAIFunctionsAgent, AgentExecutor } from "langchain/agents";
+import { HumanMessage, AIMessage } from "@langchain/core/messages";
 
 const init = async () => {
-  const chatModel = new ChatOpenAI({
-    openAIApiKey: process.env.OPENAI_API_KEY,
-  });
-
   const embeddings = new OpenAIEmbeddings({
     openAIApiKey: process.env.OPENAI_API_KEY,
   });
@@ -51,49 +43,47 @@ const init = async () => {
 
   const tools = [retrieverTool, searchTool];
 
-  const historyAwarePrompt = ChatPromptTemplate.fromMessages([
-    new MessagesPlaceholder("chat_history"),
-    ["user", "{input}"],
-    [
-      "user",
-      "Given the above conversation, generate a search query to look up in order to get information relevant to the conversation",
-    ],
-  ]);
+  const agentPrompt = await pull("hwchase17/openai-functions-agent");
 
-  const historyAwareRetrieverChain = await createHistoryAwareRetriever({
+  const chatModel = new ChatOpenAI({
+    openAIApiKey: process.env.OPENAI_API_KEY,
+    modelName: process.env.MODEL,
+    temperature: 0,
+  });
+
+  const agent = await createOpenAIFunctionsAgent({
     llm: chatModel,
-    retriever,
-    rephrasePrompt: historyAwarePrompt,
+    tools,
+    prompt: agentPrompt,
   });
 
-  const historyAwareRetrievalPrompt = ChatPromptTemplate.fromMessages([
-    [
-      "system",
-      "Answer the user's questions based on the below context:\n\n{context}",
-    ],
-    new MessagesPlaceholder("chat_history"),
-    ["user", "{input}"],
-  ]);
-
-  const historyAwareCombineDocsChain = await createStuffDocumentsChain({
-    llm: chatModel,
-    prompt: historyAwareRetrievalPrompt,
+  const agentExecutor = new AgentExecutor({
+    agent,
+    tools,
+    verbose: false,
   });
 
-  const conversationalRetrievalChain = await createRetrievalChain({
-    retriever: historyAwareRetrieverChain,
-    combineDocsChain: historyAwareCombineDocsChain,
+  const agentResult = await agentExecutor.invoke({
+    input: "how can LangSmith help with testing?",
   });
 
-  const response = await conversationalRetrievalChain.invoke({
+  console.log("agentResult.output: ", agentResult.output);
+
+  const agentResult2 = await agentExecutor.invoke({
+    input: "what is the weather in SF?",
+  });
+
+  console.log("agentResult2.output: ", agentResult2.output);
+
+  const agentResult3 = await agentExecutor.invoke({
     chat_history: [
       new HumanMessage("Can LangSmith help test my LLM applications?"),
       new AIMessage("Yes!"),
     ],
-    input: "tell me how",
+    input: "Tell me how",
   });
 
-  console.log(response.answer);
+  console.log("agentResult3.output: ", agentResult3.output);
 };
 
 init();
